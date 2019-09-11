@@ -3,7 +3,6 @@
 set -e
 
 
-
 #Global namespace in OpenShift version 4.2 supposed to be openshift-marketplace 
 
 
@@ -66,12 +65,13 @@ EOF
 
 fi
 
-if ! `oc get project ${TARGET_NAMESPACE} &>/dev/null`
-then
+# 1. Create namespace for new operator 
+echo ">>> Create target namespace ${TARGET_NAMESPACE}"
+if ! `oc get project ${TARGET_NAMESPACE} &>/dev/null`;then
     oc create ns ${TARGET_NAMESPACE}
 fi
 
-# Create OperatorGroup 
+# 2. Create OperatorGroup defining namespaces that OLM will be monitoring  
 echo ">>> Creating operatorgroup ${TARGET_NAMESPACE}-group"
 if ! `oc get operatorgroup ${TARGET_NAMESPACE}-group -n ${TARGET_NAMESPACE} &>/dev/null` ; then
   if [[ ${NAMESPACED_SUBSCR} ]]; then
@@ -99,7 +99,7 @@ EOF
   fi
 fi
 
-
+# 3. Create OperatorSource defining the source of operator catalog and creating CatalogSource. 
 echo ">>> Creating OperatorSource and CatalogSource..."
 if ! `oc get operatorsource ${APP_REGISTRY} -n ${GLOBAL_NAMESPACE} &>/dev/null`  && [ ${CUSTOM_APPREGISTRY} ]; then
 
@@ -127,27 +127,29 @@ EOF
     echo "Waiting for all objects defined by subscription to be created ..." 
     let tempCounter=${tempCount}+1
   done
-  if [[ ${temCounter} -gt $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
-     echo "OperatorSource creation has timeout..."
+  if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
+     echo "OperatorSource creation has timed out..."
      exit 1
   fi
 fi
 
+# 4. Verifing and potentially waiting for all package manifests to be loaded from the bundle 
 echo ">>> Waiting for packagemanifest ${PACKAGE} to be created ..."
 tempCounter=0
-while `oc get packagemanifest  -l catalog=${APP_REGISTRY} --field-selector metadata.name=${PACKAGE}` \
+while [[ `oc get packagemanifest  -l catalog=${APP_REGISTRY} --field-selector metadata.name=${PACKAGE} --no-headers -o custom-columns=name:metadata.name` != "${PACKAGE}" ]]  \
 && \
 [ ${tempCounter} -lt $((WAIT_FOR_OBJECT_CREATION/5)) ];do
   sleep 5
   echo "Waiting for packagemanifest to be created ..." 
   let tempCounter=${tempCount}+1
 done
-if [[ ${temCounter} -gt $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
-    echo "Packagemanifest ${PACKAGE} doesn't exist or packagemancreation has timeout..."
+if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
+    echo "Package manifest ${PACKAGE} doesn't exist or packagemancreation has timeout..."
     exit 1
 fi
 
-echo ">>> Creating Subscription"
+# 5. Adding subscription for the selected operator with manual install plan 
+echo ">>> Creating Subscription ${OPERATOR_NAME} ..."
 if [[ "`oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.channel}'`" == "${CHANNEL_VERSION}" ]]; then
   echo "Subscrition ${OPERATOR_NAME} already exist, skipping creation..."
 else
@@ -168,14 +170,14 @@ EOF
 fi 
 
 
-
+# 6. Approve install plan for subscription 
 echo ">>> Approving installPlan for subscription ${OPERATOR_NAME}"
 if [[ `oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.installPlanApproval}'` == "Manual" ]]; then 
     oc patch installplan `oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.status.installplan.name}'` -n ${TARGET_NAMESPACE} --type=json -p='[{"op":"replace", "path":"/spec/approved","value":true}]' --loglevel=5
 fi
 
 # Unfortunately CSV object doesn't set status.conditions correctly for kubectl or oc wait command to work correctly. Replaced with while 
-echo "Creating all required objects for subscription ${OPERATOR_NAME}"
+echo ">>> Creating all required objects for subscription ${OPERATOR_NAME} ..."
 tempCounter=0
 while [[ `oc get csv $(oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.status.installedCSV}') -n ${TARGET_NAMESPACE} -o jsonpath='{.status.phase}'` != "Succeeded" ]] \
 && \
@@ -184,7 +186,7 @@ while [[ `oc get csv $(oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPAC
   echo "Waiting for all objects defined by subscription to be created ..." 
   let tempCounter=${tempCount}+1
 done
-if [[ ${temCounter} -gt $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
+if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
     echo "OperatorSource creation has timeout..."
     exit 1
 fi
