@@ -1,24 +1,34 @@
 #!/bin/bash
 
-set -e
+set -ex
 
+# Optional file to set environment variable to non-default values instead of defining them on shell session level. File myenv.sh should be located in 
+# current directory 
+if [[ -f ./myenv.sh ]]; then 
+  echo ">>> myenv.sh file is present, setting some of the variables to non-default values"
+  . ./myenv.sh
+fi
 
 #Global namespace in OpenShift version 4.2 supposed to be openshift-marketplace 
 
-
+##################
+# Variables defining behavior of the script 
+# CUSTOM_APPREGISTRY - if true will use quay registry as application registry
 CUSTOM_APPREGISTRY=${CUSTOM_APPREGISTRY:-true}
+# NAMESPACED_SUBSCR - if true will create operator group explicitely specifying target namespaces that will be managed by operator otherwise it will set 
+#                     operator group globally 
 NAMESPACED_SUBSCR=${NAMESPACED_SUBSCR:-true}
+# WAIT_FOR_OBJECT_CREATION - Time in seconds for script to wait for some of the required objects to be created in Kubernetes. Time out will cause script to exit
+WAIT_FOR_OBJECT_CREATION=${WAIT_FOR_OBJECT_CREATION:-60}
 
+
+
+GLOBAL_NAMESPACE="${GLOBAL_NAMESPACE:-openshift-marketplace}"
 APP_REGISTRY="${APP_REGISTRY:-rh-osbs-operators}"
 PACKAGE="${PACKAGE:-kubevirt-hyperconverged}"
 TARGET_NAMESPACE="${TARGET_NAMESPACE:-openshift-cnv}"
-CLUSTER="${CLUSTER:-OPENSHIFT}"
 OPERATOR_NAME="${OPERATOR_NAME:-hco-operatorhub}"
-GLOBAL_NAMESPACE="${GLOBAL_NAMESPACE:-openshift-marketplace}"
 CHANNEL_VERSION="${CHANNEL_VERSION:-2.1.0}"
-
-WAIT_FOR_OBJECT_CREATION=${WAIT_FOR_OBJECT_CREATION:-60}
-
 
 
 if [[ ${CUSTOM_APPREGISTRY} ]]
@@ -125,7 +135,7 @@ EOF
   [ ${tempCounter} -lt $((WAIT_FOR_OBJECT_CREATION/5)) ];do
     sleep 5
     echo "Waiting for all objects defined by subscription to be created ..." 
-    let tempCounter=${tempCount}+1
+    let tempCounter=${tempCounter}+1
   done
   if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
      echo "OperatorSource creation has timed out..."
@@ -133,7 +143,7 @@ EOF
   fi
 fi
 
-# 4. Verifing and potentially waiting for all package manifests to be loaded from the bundle 
+# 4. Verifying and potentially waiting for all package manifests to be loaded from the bundle 
 echo ">>> Waiting for packagemanifest ${PACKAGE} to be created ..."
 tempCounter=0
 while [[ `oc get packagemanifest  -l catalog=${APP_REGISTRY} --field-selector metadata.name=${PACKAGE} --no-headers -o custom-columns=name:metadata.name` != "${PACKAGE}" ]]  \
@@ -141,7 +151,7 @@ while [[ `oc get packagemanifest  -l catalog=${APP_REGISTRY} --field-selector me
 [ ${tempCounter} -lt $((WAIT_FOR_OBJECT_CREATION/5)) ];do
   sleep 5
   echo "Waiting for packagemanifest to be created ..." 
-  let tempCounter=${tempCount}+1
+  let tempCounter=${tempCounter}+1
 done
 if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
     echo "Package manifest ${PACKAGE} doesn't exist or packagemancreation has timeout..."
@@ -184,7 +194,7 @@ while [[ `oc get csv $(oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPAC
 [ ${tempCounter} -lt $((WAIT_FOR_OBJECT_CREATION/5)) ];do
   sleep 5
   echo "Waiting for all objects defined by subscription to be created ..." 
-  let tempCounter=${tempCount}+1
+  let tempCounter=${tempCounter}+1
 done
 if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
     echo "OperatorSource creation has timeout..."
