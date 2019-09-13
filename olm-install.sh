@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -ex
+set -e
 
 # Optional file to set environment variable to non-default values instead of defining them on shell session level. File myenv.sh should be located in 
 # current directory 
@@ -17,7 +17,7 @@ fi
 CUSTOM_APPREGISTRY=${CUSTOM_APPREGISTRY:-true}
 # NAMESPACED_SUBSCR - if true will create operator group explicitely specifying target namespaces that will be managed by operator otherwise it will set 
 #                     operator group globally 
-NAMESPACED_SUBSCR=${NAMESPACED_SUBSCR:-true}
+NAMESPACED_SUBSCR=${NAMESPACED_SUBSCR:-false}
 # WAIT_FOR_OBJECT_CREATION - Time in seconds for script to wait for some of the required objects to be created in Kubernetes. Time out will cause script to exit
 WAIT_FOR_OBJECT_CREATION=${WAIT_FOR_OBJECT_CREATION:-60}
 
@@ -154,7 +154,7 @@ while [[ `oc get packagemanifest  -l catalog=${APP_REGISTRY} --field-selector me
   let tempCounter=${tempCounter}+1
 done
 if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
-    echo "Package manifest ${PACKAGE} doesn't exist or packagemancreation has timeout..."
+    echo "Package manifest ${PACKAGE} doesn't exist or packagemanifest creation has timed out..."
     exit 1
 fi
 
@@ -183,7 +183,7 @@ fi
 # 6. Approve install plan for subscription 
 echo ">>> Approving installPlan for subscription ${OPERATOR_NAME}"
 if [[ `oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.spec.installPlanApproval}'` == "Manual" ]]; then 
-    oc patch installplan `oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.status.installplan.name}'` -n ${TARGET_NAMESPACE} --type=json -p='[{"op":"replace", "path":"/spec/approved","value":true}]' --loglevel=5
+    oc patch installplan `oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} -o jsonpath='{.status.installplan.name}'` -n ${TARGET_NAMESPACE} --type=json -p='[{"op":"replace", "path":"/spec/approved","value":true}]'
 fi
 
 # Unfortunately CSV object doesn't set status.conditions correctly for kubectl or oc wait command to work correctly. Replaced with while 
@@ -197,6 +197,31 @@ while [[ `oc get csv $(oc get subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPAC
   let tempCounter=${tempCounter}+1
 done
 if [[ ${tempCounter} -eq $((WAIT_FOR_OBJECT_CREATION/5)) ]]; then 
-    echo "OperatorSource creation has timeout..."
+    echo "OperatorSource creation has timed out..."
     exit 1
+fi
+echo ">>> **** Operator ${OPERATOR_NAME} has been installed ****"
+
+# Experimental 
+# Trigger Operator to install application resources. 
+# Considering that complexity of Custom Resources and installation sequence can vary between different operators we will rely on kustomize functionality
+# that is part kubectl client starting from Kubernetes 1.14. Note: As oc kustomize doesn't have edit subcommand we will have to update tokens in kustomization.yaml
+#file . Use https://github.com/kubernetes-sigs/kustomize documentation for details on kustomize syntax and implementation details
+
+# Trigger 
+if [[ -d ./kustomize ]]; then 
+  #if template kustomization.yaml file template is present replace all variables with actual values set in this script
+  if [[ -f ./kustomize/${OPERATOR_NAME}/kustomization.yaml.templ ]]; then 
+    cat ./kustomize/${OPERATOR_NAME}/kustomization.yaml.templ|envsubst '${TARGET_NAMESPACE} ${OPERATOR_NAME} {CHANNEL_VERSION}' > ./kustomize/${OPERATOR_NAME}/kustomization.yaml
+  fi 
+  if [[ ! -f ./kustomize/${OPERATOR_NAME}/kustomization.yaml ]]; then
+    echo ">>> kustomization.yaml file is not present. Something went wrong processing template or directory is empty. Skiping executions of operator kustomize sequence"
+    exit 1
+  fi 
+  echo ">>> Triggering ${OPERATOR_NAME} as defined in kustomization.yaml file"
+  echo ">>> Following objects are defined and will be applied: "
+  oc kustomize ./kustomize/${OPERATOR_NAME}
+  oc apply -k ./kustomize/${OPERATOR_NAME}
+else
+  echo ">>> Directory kustomize is not present , skipping trigering operator. Manually apply required CRs"
 fi
