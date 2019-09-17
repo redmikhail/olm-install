@@ -29,34 +29,51 @@ PACKAGE="${PACKAGE:-kubevirt-hyperconverged}"
 TARGET_NAMESPACE="${TARGET_NAMESPACE:-openshift-cnv}"
 OPERATOR_NAME="${OPERATOR_NAME:-hco-operatorhub}"
 CHANNEL_VERSION="${CHANNEL_VERSION:-2.1.0}"
+SUBSCRIPTION_APPROVAL="${SUBSCRIPTION_APPROVAL:-Manual}"
+export TARGET_NAMESPACE
 
 
-if [[ ${CUSTOM_APPREGISTRY} ]]
-  then 
+if [[ ${CUSTOM_APPREGISTRY} ]]; then
 
-    ####################
+  QUAY_TOKEN="${QUAY_TOKEN:-}"
+
+  if [ -z "${QUAY_TOKEN}" ]; then 
+
+    # If application registry authentication token hasn't been provided check for username/password
     QUAY_USERNAME="${QUAY_USERNAME:-}"
     QUAY_PASSWORD="${QUAY_PASSWORD:-}"
 
     if [ -z "${QUAY_USERNAME}" ]; then
-        echo "QUAY_USERNAME"
-        read QUAY_USERNAME
+        echo ">>> QUAY_USERNAME is not set "
+        exit 1
     fi
 
     if [ -z "${QUAY_PASSWORD}" ]; then
-        echo "QUAY_PASSWORD"
-        read -s QUAY_PASSWORD
+        echo ">>> QUAY_PASSWORD is not set "
+        exit 1
     fi
 
-    TOKEN=$(curl -sH "Content-Type: application/json" -XPOST https://quay.io/cnr/api/v1/users/login -d '
-    {
-        "user": {
-            "username": "'"${QUAY_USERNAME}"'",
-            "password": "'"${QUAY_PASSWORD}"'"
-        }
-    }' | jq -r '.token')
+  else
 
-    if [ "${TOKEN}" == "null" ]; then
+    echo ">>> Token for Quay registry has been provided. Validating access ..."
+
+    # To validate that token is correct and credentials are valid we will extract username and password from token. This step may look somewhat redundant but
+    # unfortunately at this point Quay doesn't seem to provide alternative API to validate access 
+
+    QUAY_USERNAME=$(echo ${QUAY_TOKEN}|cut -d' '  -f2|base64 -d |cut -d : -f1)
+    QUAY_PASSWORD=$(echo ${QUAY_TOKEN}|cut -d' '  -f2|base64 -d |cut -d : -f2)
+
+  fi
+
+  QUAY_TOKEN=$(curl -sH "Content-Type: application/json" -XPOST https://quay.io/cnr/api/v1/users/login -d '
+  {
+      "user": {
+          "username": "'"${QUAY_USERNAME}"'",
+          "password": "'"${QUAY_PASSWORD}"'"
+      }
+  }' | jq -r '.token')
+
+    if [ "${QUAY_TOKEN}" == "null" ]; then
         echo "TOKEN was 'null'.  Did you enter the correct quay Username & Password?"
         exit 1
     fi
@@ -70,7 +87,7 @@ metadata:
   namespace: "${GLOBAL_NAMESPACE}"
 type: Opaque
 stringData:
-      token: "${TOKEN}"
+      token: "${QUAY_TOKEN}"
 EOF
 
 fi
@@ -174,7 +191,7 @@ spec:
   sourceNamespace: "${GLOBAL_NAMESPACE}"
   name: ${PACKAGE}
   channel: "${CHANNEL_VERSION}"
-  installPlanApproval: Manual
+  installPlanApproval: "${SUBSCRIPTION_APPROVAL}"
 EOF
   oc wait subscription ${OPERATOR_NAME} -n ${TARGET_NAMESPACE} --for=condition=InstallPlanPending --timeout="${WAIT_FOR_OBJECT_CREATION}s"
 fi 
